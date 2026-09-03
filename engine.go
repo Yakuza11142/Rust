@@ -13,7 +13,7 @@ import (
 	"time"
 	"unsafe"
 
-	"://github.com"
+	utls "github.com/refraction-networking/utls"
 	"golang.org/x/net/http2"
 )
 
@@ -27,7 +27,7 @@ type InboundPayload struct {
 func ExecuteStatelessScrape(cPayload *C.char) *C.char {
 	goJSONString := C.GoString(cPayload)
 	var payload InboundPayload
-	
+
 	if err := json.Unmarshal([]byte(goJSONString), &payload); err != nil {
 		return C.CString("SYSTEM_ERROR: JSON schema mismatch crossing C-boundary")
 	}
