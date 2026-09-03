@@ -3,6 +3,11 @@ on:
   push:
     tags:
       - 'v*'
+
+# Grant explicitly required permissions for creating cloud releases safely
+permissions:
+  contents: write
+
 jobs:
   release-assets:
     runs-on: ubuntu-24.04
