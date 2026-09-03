@@ -13,11 +13,8 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.27'
-    - name: Initialize or Tidy Go Modules
+    - name: Tidy Go Modules
       run: |
-        if [ ! -f go.mod ]; then
-          go mod init libscraper
-        fi
         go mod tidy
     - name: Build Shared Object Matrix
       run: |
