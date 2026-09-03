@@ -3,11 +3,6 @@ on:
   push:
     tags:
       - 'v*'
-
-# Grant explicitly required permissions for creating cloud releases safely
-permissions:
-  contents: write
-
 jobs:
   release-assets:
     runs-on: ubuntu-24.04
@@ -18,6 +13,12 @@ jobs:
       uses: actions/setup-go@v5
       with:
         go-version: '1.27'
+    - name: Initialize or Tidy Go Modules
+      run: |
+        if [ ! -f go.mod ]; then
+          go mod init libscraper
+        fi
+        go mod tidy
     - name: Build Shared Object Matrix
       run: |
         GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -o libscraper_linux_amd64.so engine.go
