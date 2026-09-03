@@ -1,0 +1,7 @@
+{
+  "status": "success",
+  "test_target": "https://httpbin.org",
+  "mocked_network_extraction_size_bytes": 1280,
+  "tls_fingerprint_status": "MATCHED_CHROME_V120",
+  "http2_multiplexing": true
+}
