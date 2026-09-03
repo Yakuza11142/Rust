@@ -1,32 +1,40 @@
-name: Continuous Integration Pipeline
+name: Continuous Integration
+
 on:
   push:
     branches: [ main, master ]
   pull_request:
     branches: [ main, master ]
+
 jobs:
   build-and-test:
-    runs-on: ubuntu-24.04  # Utilizing stable, standard enterprise environment specs
+    runs-on: ubuntu-24.04
     steps:
-    - name: Check out repository code
-      uses: actions/checkout@v4
-    - name: Setup Go environment
-      uses: actions/setup-go@v5
-      with:
-        go-version: '1.20'
-        cache: true
-    - name: Download Go dependencies
-      run: |
-        go mod init libscraper || true
-        go get ://github.com
-        go get golang.org/x/net@v0.23.0
-        go mod tidy
-    - name: Verify compilation to Linux x86_64 Shared Object (.so)
-      run: |
-        GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -o libscraper.so engine.go
-    - name: Validate output file generation
-      run: |
-        if [ ! -f "libscraper.so" ]; then
-          echo "CRITICAL ERROR: Compilation failed."
-          exit 1
-        fi
+      - name: Checkout Code
+        uses: actions/checkout@v4
+
+      - name: Setup Go Environment
+        uses: actions/setup-go@v5
+        with:
+          go-version: '1.27'
+          cache: true
+
+      - name: Clean and Tidy Dependencies
+        run: |
+          if [ -f go.mod ]; then
+            go mod tidy
+          else
+            go mod init libscraper
+            go mod tidy
+          fi
+
+      - name: Compile Linux x86_64 Shared Object
+        run: |
+          GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -o libscraper_linux_amd64.so engine.go
+
+      - name: Verify Binary Output
+        run: |
+          if [ ! -f "libscraper_linux_amd64.so" ]; then
+            echo "CRITICAL ERROR: Shared object compilation failed."
+            exit 1
+          fi
