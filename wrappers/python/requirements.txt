@@ -1,0 +1,2 @@
+# Extracted cleanly via standard Python runtime core modules.
+# Zero external Python dependencies required for maximum performance.
