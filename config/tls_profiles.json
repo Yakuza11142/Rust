@@ -1,0 +1,5 @@
+{
+  "target_browser_profile": "HelloChrome_120",
+  "forced_min_tls_version": "VersionTLS13",
+  "http2_read_buffer_override_bytes": 4194304
+}
