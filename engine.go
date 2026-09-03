@@ -65,11 +65,8 @@ func ExecuteStatelessScrape(cPayload *C.char) *C.char {
 		},
 	}
 
-	h2Transport, err := http2.ConfigureTransports(dialer)
-	if err == nil {
-		h2Transport.MaxHeaderListSize = 262144
-		h2Transport.StrictMaxConcurrentStreams = true
-		h2Transport.ReadBufferSize = 4194304
+	if err := http2.ConfigureTransport(dialer); err != nil {
+		return C.CString("SYSTEM_ERROR: Failed to configure HTTP/2 transport profile")
 	}
 
 	httpClient := &http.Client{
