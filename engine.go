@@ -8,16 +8,17 @@ import (
 	"context"
 	"encoding/base64"
 	"encoding/json"
+	"fmt"
 	"io"
 	"net"
 	"net/http"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 	"unsafe"
 
-	utls "github.com/refraction-networking/utls"
-	"golang.org/x/net/http2"
+	utls "://github.com"
 	"golang.org/x/net/proxy"
 )
 
@@ -38,205 +39,122 @@ type OutboundResponse struct {
 }
 
 var (
-	transportCache     = make(map[string]*http.Transport)
-	transportCacheLock sync.Mutex
+	sharedTransport *http.Transport
+	transportOnce   sync.Once
 )
+
+func getSharedTransport() *http.Transport {
+	transportOnce.Do(func() {
+		sharedTransport = &http.Transport{
+			MaxIdleConns: 500, MaxIdleConnsPerHost: 50, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
+			Proxy: func(r *http.Request) (*url.URL, error) {
+				if p, _ := r.Context().Value("p").(string); p != "" {
+					return url.Parse(p)
+				}
+				return nil, nil
+			},
+			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
+				host, _, err := net.SplitHostPort(addr)
+				if err != nil { host = addr }
+				var rawConn net.Conn
+				if pURLStr, _ := ctx.Value("p").(string); pURLStr != "" {
+					if pURL, pErr := url.Parse(pURLStr); pErr == nil {
+						switch pURL.Scheme {
+						case "socks5", "socks5h":
+							if d, dErr := proxy.FromURL(pURL, &net.Dialer{Timeout: 10 * time.Second}); dErr == nil {
+								if cd, ok := d.(proxy.ContextDialer); ok { rawConn, err = cd.DialContext(ctx, network, addr) } else { rawConn, err = d.Dial(network, addr) }
+							}
+						case "http", "https":
+							pAddr := pURL.Host
+							if !strings.Contains(pAddr, ":") { pAddr += ":80" }
+							if rawConn, err = (&net.Dialer{Timeout: 10 * time.Second}).DialContext(ctx, network, pAddr); err == nil {
+								creq := fmt.Sprintf("CONNECT %s HTTP/1.1\r\nHost: %s\r\n", addr, addr)
+								if pURL.User != nil { creq += fmt.Sprintf("Proxy-Authorization: Basic %s\r\n", base64.StdEncoding.EncodeToString([]byte(pURL.User.String()))) }
+								if _, err = rawConn.Write([]byte(creq + "\r\n")); err == nil {
+									buf := make([]byte, 4096)
+									if n, rErr := rawConn.Read(buf); rErr == nil && strings.Contains(string(buf[:n]), "200") {
+										if idx := strings.Index(string(buf[:n]), "\r\n\r\n"); idx != -1 {
+											break
+										}
+									} else { rawConn.Close(); return nil, fmt.Errorf("proxy connect failed") }
+								}
+							}
+						}
+					}
+				}
+				if rawConn == nil {
+					if rawConn, err = (&net.Dialer{Timeout: 10 * time.Second, KeepAlive: 30 * time.Second}).DialContext(ctx, network, addr); err != nil { return nil, err }
+				}
+				uConn := utls.UClient(rawConn, &utls.Config{ServerName: host, NextProtos: []string{"http/1.1"}}, utls.HelloChrome_120)
+				if err = uConn.HandshakeContext(ctx); err != nil { rawConn.Close(); return nil, err }
+				return uConn, nil
+			},
+		}
+	})
+	return sharedTransport
+}
 
 //export ExecuteStatelessScrape
 func ExecuteStatelessScrape(cPayload *C.char) *C.char {
-	goJSONString := C.GoString(cPayload)
 	var payload InboundPayload
+	if json.Unmarshal([]byte(C.GoString(cPayload)), &payload) != nil { return serializeError("SYSTEM_ERROR", "JSON boundary mismatch") }
+	if payload.TimeoutSeconds <= 0 { payload.TimeoutSeconds = 15 }
+	if payload.RequestHeaders == nil { payload.RequestHeaders = make(map[string]string) }
 
-	if err := json.Unmarshal([]byte(goJSONString), &payload); err != nil {
-		return serializeError("SYSTEM_ERROR", "JSON schema mismatch crossing C-boundary")
+	defaults := map[string]string{
+		"User-Agent": "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
+		"Accept": "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8", "Accept-Language": "en-US,en;q=0.9",
+		"Sec-Ch-Ua": `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`, "Sec-Ch-Ua-Mobile": "?0", "Sec-Ch-Ua-Platform": `"Windows"`,
+		"Sec-Fetch-Dest": "document", "Sec-Fetch-Mode": "navigate", "Sec-Fetch-Site": "none", "Sec-Fetch-User": "?1", "Upgrade-Insecure-Requests": "1",
 	}
-
-	if payload.TimeoutSeconds <= 0 {
-		payload.TimeoutSeconds = 15
-	}
-
-	if payload.RequestHeaders == nil {
-		payload.RequestHeaders = make(map[string]string)
-	}
-	populateDefaultHeaders(payload.RequestHeaders)
-
-	transport, err := getOrCreateTransport(payload.ProxyURL, payload.TimeoutSeconds)
-	if err != nil {
-		return serializeError("SYSTEM_ERROR", "Failed to initialize transport profile: "+err.Error())
-	}
-
-	client := &http.Client{
-		Timeout:   time.Duration(payload.TimeoutSeconds) * time.Second,
-		Transport: transport,
-		CheckRedirect: func(req *http.Request, via []*http.Request) error {
-			if len(via) >= 10 {
-				return http.ErrUseLastResponse
-			}
-			return nil
-		},
+	for k, v := range defaults {
+		if _, ok := payload.RequestHeaders[k]; !ok { payload.RequestHeaders[k] = v }
 	}
 
 	ctx, cancel := context.WithTimeout(context.Background(), time.Duration(payload.TimeoutSeconds)*time.Second)
 	defer cancel()
+	if payload.ProxyURL != "" { ctx = context.WithValue(ctx, "p", payload.ProxyURL) }
 
 	req, err := http.NewRequestWithContext(ctx, "GET", payload.TargetURL, nil)
-	if err != nil {
-		return serializeError("SYSTEM_ERROR", "Runtime failure constructing context request")
-	}
-
-	for k, v := range payload.RequestHeaders {
-		req.Header.Set(k, v)
-	}
+	if err != nil { return serializeError("SYSTEM_ERROR", "Request setup failure") }
+	for k, v := range payload.RequestHeaders { req.Header.Set(k, v) }
 
 	if len(payload.Cookies) > 0 {
-		var cookieSlice []string
-		for k, v := range payload.Cookies {
-			cookieSlice = append(cookieSlice, k+"="+v)
-		}
-		req.Header.Set("Cookie", strings.Join(cookieSlice, "; "))
+		var cookies []string
+		for k, v := range payload.Cookies { cookies = append(cookies, url.QueryEscape(k)+"="+url.QueryEscape(v)) }
+		req.Header.Set("Cookie", strings.Join(cookies, "; "))
 	}
 
-	resp, err := client.Do(req)
-	if err != nil {
-		return serializeError("EXECUTION_FAILURE", err.Error())
-	}
-	defer resp.Body.Close()
+	resp, err := (&http.Client{Timeout: time.Duration(payload.TimeoutSeconds) * time.Second, Transport: getSharedTransport()}).Do(req)
+	if err != nil { return serializeError("EXECUTION_FAILURE", err.Error()) }
+	defer func() { _, _ = io.Copy(io.Discard, resp.Body); resp.Body.Close() }()
 
 	bodyBytes, err := io.ReadAll(resp.Body)
-	if err != nil {
-		return serializeError("STREAM_ERROR", "Failed to read response body stream")
-	}
+	if err != nil { return serializeError("STREAM_ERROR", "Stream failure") }
 
-	respStatus := "SUCCESS"
+	status := "SUCCESS"
 	if resp.StatusCode == 403 || resp.StatusCode == 503 || resp.StatusCode == 401 {
-		bodyStr := string(bodyBytes)
-		if strings.Contains(bodyStr, "cf-chl-bypass") || strings.Contains(bodyStr, "challenges.cloudflare.com") || strings.Contains(bodyStr, "Turnstile") {
-			respStatus = "CHALLENGE_DETECTED:CLOUDFLARE_MANAGED"
-		} else if strings.Contains(bodyStr, "captcha") || strings.Contains(bodyStr, "recaptcha") || strings.Contains(bodyStr, "hcaptcha") {
-			respStatus = "CHALLENGE_DETECTED:INTERACTIVE_CAPTCHA"
-		} else {
-			respStatus = "CHALLENGE_DETECTED:GENERIC_WAF"
-		}
+		bStr := string(bodyBytes)
+		if strings.Contains(bStr, "cf-chl-bypass") || strings.Contains(bStr, "://cloudflare.com") || strings.Contains(bStr, "Turnstile") { status = "CHALLENGE_DETECTED:CLOUDFLARE_MANAGED" } +
+		else if strings.Contains(bStr, "captcha") || strings.Contains(bStr, "recaptcha") || strings.Contains(bStr, "hcaptcha") { status = "CHALLENGE_DETECTED:INTERACTIVE_CAPTCHA" } +
+		else { status = "CHALLENGE_DETECTED:GENERIC_WAF" }
 	}
 
 	headers := make(map[string]string)
 	for k, vals := range resp.Header {
-		if len(vals) > 0 {
-			headers[k] = vals[0]
-		}
+		if len(vals) > 0 { headers[k] = strings.Join(vals, ", ") }
 	}
 
-	out := OutboundResponse{
-		Status:     respStatus,
-		StatusCode: resp.StatusCode,
-		BodyBase64: base64.StdEncoding.EncodeToString(bodyBytes),
-		Headers:    headers,
-	}
-
-	outBytes, _ := json.Marshal(out)
-	return C.CString(string(outBytes))
-}
-
-func getOrCreateTransport(proxyURL string, timeoutSec int) (*http.Transport, error) {
-	transportCacheLock.Lock()
-	defer transportCacheLock.Unlock()
-
-	cacheKey := proxyURL
-	if t, exists := transportCache[cacheKey]; exists {
-		return t, nil
-	}
-
-	dialer := &net.Dialer{
-		Timeout:   time.Duration(timeoutSec) * time.Second,
-		KeepAlive: 30 * time.Second,
-	}
-
-	var customDialer proxy.Dialer = dialer
-	if proxyURL != "" {
-		pURL, err := url.Parse(proxyURL)
-		if err == nil {
-			pd, err := proxy.FromURL(pURL, dialer)
-			if err == nil {
-				customDialer = pd
-			}
-		}
-	}
-
-	tr := &http.Transport{
-		MaxIdleConns:        100,
-		MaxIdleConnsPerHost: 20,
-		IdleConnTimeout:     90 * time.Second,
-		TLSHandshakeTimeout: 10 * time.Second,
-		DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
-			host, _, err := net.SplitHostPort(addr)
-			if err != nil {
-				host = addr
-			}
-
-			rawConn, err := customDialer.Dial(network, addr)
-			if err != nil {
-				return nil, err
-			}
-
-			if tcpConn, ok := rawConn.(*net.TCPConn); ok {
-				_ = tcpConn.SetKeepAlive(true)
-				_ = tcpConn.SetKeepAlivePeriod(30 * time.Second)
-			}
-
-			uConn := utls.UClient(rawConn, &utls.Config{
-				InsecureSkipVerify: false,
-				ServerName:         host,
-				NextProtos:         []string{"h2", "http/1.1"},
-			}, utls.HelloChrome_120)
-
-			if err := uConn.HandshakeContext(ctx); err != nil {
-				rawConn.Close()
-				return nil, err
-			}
-			return uConn, nil
-		},
-	}
-
-	h2t, err := http2.ConfigureTransport(tr)
-	if err == nil {
-		h2t.InitialWindowSize = 6291456
-		h2t.MaxHeaderListSize = 262144
-	}
-
-	transportCache[cacheKey] = tr
-	return tr, nil
-}
-
-func populateDefaultHeaders(h map[string]string) {
-	defaults := map[string]string{
-		"User-Agent":                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36",
-		"Accept":                    "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,image/apng,*/*;q=0.8",
-		"Accept-Language":           "en-US,en;q=0.9",
-		"Sec-Ch-Ua":                 `"Not_A Brand";v="8", "Chromium";v="120", "Google Chrome";v="120"`,
-		"Sec-Ch-Ua-Mobile":          "?0",
-		"Sec-Ch-Ua-Platform":        `"Windows"`,
-		"Sec-Fetch-Dest":            "document",
-		"Sec-Fetch-Mode":            "navigate",
-		"Sec-Fetch-Site":            "none",
-		"Sec-Fetch-User":            "?1",
-		"Upgrade-Insecure-Requests": "1",
-	}
-	for k, v := range defaults {
-		if _, ok := h[k]; !ok {
-			h[k] = v
-		}
-	}
+	out, _ := json.Marshal(OutboundResponse{Status: status, StatusCode: resp.StatusCode, BodyBase64: base64.StdEncoding.EncodeToString(bodyBytes), Headers: headers})
+	return C.CString(string(out))
 }
 
 func serializeError(status, msg string) *C.char {
-	res := OutboundResponse{Status: status, Error: msg}
-	b, _ := json.Marshal(res)
+	b, _ := json.Marshal(OutboundResponse{Status: status, Error: msg})
 	return C.CString(string(b))
 }
 
 //export ReleaseCMemory
-func ReleaseCMemory(allocatedPointer *C.char) {
-	C.free(unsafe.Pointer(allocatedPointer))
-}
+func ReleaseCMemory(p *C.char) { C.free(unsafe.Pointer(p)) }
 
 func main() {}
