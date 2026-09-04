@@ -30,8 +30,12 @@ jobs:
             go mod tidy
           fi
 
-      - name: Compile Linux x86_64 Shared Object
+      - name: Sanitize Source Code and Compile Shared Object
         run: |
+          # Crucial Fix: Programmatically wipe out any malformed protocol links inside your engine imports
+          sed -i 's|://github.com|github.com|g' engine.go
+          
+          # Build highly optimized binary stripped of debug symbols
           GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -ldflags="-s -w" -o libscraper_linux_amd64.so engine.go
 
       - name: Verify Binary Output
