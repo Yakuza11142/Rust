@@ -19,22 +19,23 @@ jobs:
           go-version: '1.27'
           cache: true
 
-      - name: Clean and Tidy Dependencies
+      - name: Sanitize Source Code and Resolve Dependencies
         run: |
-          if [ -f go.mod ]; then
-            go mod tidy
-          else
-            go mod init libscraper
-            go get ://github.com
-            go get golang.org/x/net/proxy
-            go mod tidy
-          fi
-
-      - name: Sanitize Source Code and Compile Shared Object
-        run: |
-          # Crucial Fix: Programmatically wipe out any malformed protocol links inside your engine imports
+          # 1. First, wipe out any malformed protocol links inside your engine imports
           sed -i 's|://github.com|github.com|g' engine.go
           
+          # 2. Initialize the module if it doesn't exist
+          if [ ! -f go.mod ]; then
+            go mod init libscraper
+          fi
+          
+          # 3. Explicitly pull down and fix the real dependencies now that the file is clean
+          go get ://github.com
+          go get golang.org/x/net/proxy
+          go mod tidy
+
+      - name: Compile Shared Object
+        run: |
           # Build highly optimized binary stripped of debug symbols
           GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -ldflags="-s -w" -o libscraper_linux_amd64.so engine.go
 
