@@ -48,9 +48,7 @@ func getSharedTransport() *http.Transport {
 		sharedTransport = &http.Transport{
 			MaxIdleConns: 500, MaxIdleConnsPerHost: 50, IdleConnTimeout: 90 * time.Second, TLSHandshakeTimeout: 10 * time.Second,
 			Proxy: func(r *http.Request) (*url.URL, error) {
-				if p, _ := r.Context().Value("p").(string); p != "" {
-					return url.Parse(p)
-				}
+				if p, _ := r.Context().Value("p").(string); p != "" { return url.Parse(p) }
 				return nil, nil
 			},
 			DialContext: func(ctx context.Context, network, addr string) (net.Conn, error) {
@@ -73,9 +71,7 @@ func getSharedTransport() *http.Transport {
 								if _, err = rawConn.Write([]byte(creq + "\r\n")); err == nil {
 									buf := make([]byte, 4096)
 									if n, rErr := rawConn.Read(buf); rErr == nil && strings.Contains(string(buf[:n]), "200") {
-										if idx := strings.Index(string(buf[:n]), "\r\n\r\n"); idx != -1 {
-											break
-										}
+										if idx := strings.Index(string(buf[:n]), "\r\n\r\n"); idx != -1 { break }
 									} else { rawConn.Close(); return nil, fmt.Errorf("proxy connect failed") }
 								}
 							}
@@ -135,9 +131,13 @@ func ExecuteStatelessScrape(cPayload *C.char) *C.char {
 	status := "SUCCESS"
 	if resp.StatusCode == 403 || resp.StatusCode == 503 || resp.StatusCode == 401 {
 		bStr := string(bodyBytes)
-		if strings.Contains(bStr, "cf-chl-bypass") || strings.Contains(bStr, "://cloudflare.com") || strings.Contains(bStr, "Turnstile") { status = "CHALLENGE_DETECTED:CLOUDFLARE_MANAGED" } +
-		else if strings.Contains(bStr, "captcha") || strings.Contains(bStr, "recaptcha") || strings.Contains(bStr, "hcaptcha") { status = "CHALLENGE_DETECTED:INTERACTIVE_CAPTCHA" } +
-		else { status = "CHALLENGE_DETECTED:GENERIC_WAF" }
+		if strings.Contains(bStr, "cf-chl-bypass") || strings.Contains(bStr, "://cloudflare.com") || strings.Contains(bStr, "Turnstile") { 
+			status = "CHALLENGE_DETECTED:CLOUDFLARE_MANAGED" 
+		} else if strings.Contains(bStr, "captcha") || strings.Contains(bStr, "recaptcha") || strings.Contains(bStr, "hcaptcha") { 
+			status = "CHALLENGE_DETECTED:INTERACTIVE_CAPTCHA" 
+		} else { 
+			status = "CHALLENGE_DETECTED:GENERIC_WAF" 
+		}
 	}
 
 	headers := make(map[string]string)
