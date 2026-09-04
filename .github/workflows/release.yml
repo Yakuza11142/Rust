@@ -8,6 +8,8 @@ on:
 jobs:
   release-assets:
     runs-on: ubuntu-24.04
+    permissions:
+      contents: write
     steps:
       - name: Checkout Code
         uses: actions/checkout@v4
@@ -34,4 +36,6 @@ jobs:
       - name: Generate Automated GitHub Release
         uses: softprops/action-gh-release@v2
         with:
-          files: libscraper_linux_amd64.so
+          files: |
+            libscraper_linux_amd64.so
+            libscraper_linux_amd64.h
