@@ -25,12 +25,14 @@ jobs:
             go mod tidy
           else
             go mod init libscraper
+            go get ://github.com
+            go get golang.org/x/net/proxy
             go mod tidy
           fi
 
       - name: Compile Linux x86_64 Shared Object
         run: |
-          GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -o libscraper_linux_amd64.so engine.go
+          GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -ldflags="-s -w" -o libscraper_linux_amd64.so engine.go
 
       - name: Verify Binary Output
         run: |
