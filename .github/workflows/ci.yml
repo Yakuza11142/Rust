@@ -34,7 +34,15 @@ jobs:
 
       - name: Verify Binary Output
         run: |
-          if [ ! -f "libscraper_linux_amd64.so" ]; then
-            echo "CRITICAL ERROR: Shared object compilation failed."
+          if [ ! -f "libscraper_linux_amd64.so" ] || [ ! -f "libscraper_linux_amd64.h" ]; then
+            echo "CRITICAL ERROR: Shared object or header compilation failed."
             exit 1
           fi
+
+      - name: Upload Compiled Binary Artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: libscraper_linux_amd64_binaries
+          path: |
+            libscraper_linux_amd64.so
+            libscraper_linux_amd64.h
