@@ -16,27 +16,21 @@ jobs:
       - name: Setup Go Environment
         uses: actions/setup-go@v5
         with:
-          go-version: '1.27'
+          go-version: '1.23'
           cache: true
 
-      - name: Sanitize Source Code and Resolve Dependencies
+      - name: Initialize Module and Resolve Dependencies
         run: |
-          # 1. First, wipe out any malformed protocol links inside your engine imports
-          sed -i 's|://github.com|github.com|g' engine.go
-          
-          # 2. Initialize the module if it doesn't exist
           if [ ! -f go.mod ]; then
             go mod init libscraper
           fi
           
-          # 3. Explicitly pull down and fix the real dependencies now that the file is clean
-          go get ://github.com
+          go get github.com/refraction-networking/utls
           go get golang.org/x/net/proxy
           go mod tidy
 
       - name: Compile Shared Object
         run: |
-          # Build highly optimized binary stripped of debug symbols
           GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -ldflags="-s -w" -o libscraper_linux_amd64.so engine.go
 
       - name: Verify Binary Output
