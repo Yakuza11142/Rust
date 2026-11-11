@@ -169,7 +169,7 @@ func ExecuteStatelessScrape(cPayload *C.char) *C.char {
 
 	resp, err := (&http.Client{Timeout: time.Duration(payload.TimeoutSeconds) * time.Second, Transport: getSharedTransport()}).Do(req)
 	if err != nil {
-		return serializeType("EXECUTION_FAILURE", err.Error()) // Handled via serializeError below
+		return serializeError("EXECUTION_FAILURE", err.Error())
 	}
 	defer func() {
 		_, _ = io.Copy(io.Discard, resp.Body)
