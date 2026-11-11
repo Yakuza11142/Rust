@@ -30,8 +30,17 @@ jobs:
           fi
 
       - name: Build Shared Object Matrix
+        env:
+          CGO_ENABLED: 1
         run: |
-          GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -o libscraper_linux_amd64.so engine.go
+          GOOS=linux GOARCH=amd64 go build -buildmode=c-shared -ldflags="-s -w" -o libscraper_linux_amd64.so engine.go
+
+      - name: Verify Compiled Artifacts
+        run: |
+          if [ ! -f "libscraper_linux_amd64.so" ] || [ ! -f "libscraper_linux_amd64.h" ]; then
+            echo "CRITICAL: Compilation failed or headers were not generated."
+            exit 1
+          fi
 
       - name: Generate Automated GitHub Release
         uses: softprops/action-gh-release@v2
@@ -39,3 +48,4 @@ jobs:
           files: |
             libscraper_linux_amd64.so
             libscraper_linux_amd64.h
+          generate_release_notes: true
